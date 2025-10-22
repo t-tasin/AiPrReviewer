@@ -1,0 +1,122 @@
+// This is your Prisma schema file for AI PR Reviewer Phase 2
+// Database: Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Model - Stores authenticated users via GitHub OAuth
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  repositories  Repository[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// NextAuth Account Model
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?  @db.Text
+  access_token       String?  @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?  @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+// NextAuth Session Model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// NextAuth Verification Token Model
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Repository Model - Stores GitHub repositories where the app is installed
+model Repository {
+  id                        Int       @id @default(autoincrement())
+  githubRepoId              Int       @unique
+  name                      String
+  fullName                  String
+  owner                     String
+  userId                    String
+  installationId            Int
+
+  // Relations
+  user                      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  configuration             RepositoryConfiguration?
+  reviewMetrics             ReviewMetric[]
+
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([githubRepoId])
+}
+
+// RepositoryConfiguration Model - Stores custom settings per repository
+model RepositoryConfiguration {
+  id                Int       @id @default(autoincrement())
+  repositoryId      Int       @unique
+  customPrompt      String?   @db.Text
+  enabled           Boolean   @default(true)
+
+  // Relations
+  repository        Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ReviewMetric Model - Tracks performance metrics for each review
+model ReviewMetric {
+  id              Int       @id @default(autoincrement())
+  repositoryId    Int?
+  prNumber        Int?
+  startTime       DateTime?
+  endTime         DateTime?
+  latencyMs       Int?
+  success         Boolean?
+  errorMessage    String?   @db.Text
+
+  // Relations
+  repository      Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime  @default(now())
+
+  @@index([repositoryId])
+  @@index([createdAt])
+}

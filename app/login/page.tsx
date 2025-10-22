@@ -13,7 +13,7 @@ function LoginContent() {
       <div className="w-full max-w-md rounded-lg bg-gray-800 p-8 shadow-lg">
         <div className="mb-8 text-center">
           <h1 className="mb-2 text-3xl font-bold text-white">
-            🤖 Gemini Reviewer
+            🤖 ReviewBuddy
           </h1>
           <p className="text-gray-400">
             AI-powered code reviews for your GitHub PRs

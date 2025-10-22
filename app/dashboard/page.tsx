@@ -66,7 +66,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-2xl font-bold text-white">
-                🤖 Gemini Reviewer Dashboard
+                🤖 ReviewBuddy Dashboard
               </h1>
               <p className="text-gray-400">
                 Welcome, {session?.user?.name || session?.user?.email}
@@ -94,12 +94,12 @@ export default function DashboardPage() {
               {repositories.length === 0 ? (
                 <div className="rounded-lg bg-gray-700 p-4 text-center text-gray-300">
                   <p className="text-sm">
-                    No repositories with Gemini Reviewer installed yet.
+                    No repositories with ReviewBuddy installed yet.
                   </p>
                   <p className="mt-2 text-xs text-gray-400">
                     Install the app on{' '}
                     <a
-                      href="https://github.com/apps/gemini-reviewer"
+                      href="https://github.com/apps/ai-pr-reviewer-s"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-400 hover:underline"

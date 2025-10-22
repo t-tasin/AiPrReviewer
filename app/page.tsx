@@ -9,13 +9,13 @@ export default function Home() {
     <div className="flex min-h-screen items-center justify-center bg-gray-900">
       <div className="max-w-2xl text-center">
         <h1 className="mb-4 text-5xl font-bold text-white">
-          🤖 Gemini Reviewer
+          🤖 ReviewBuddy
         </h1>
         <p className="mb-8 text-xl text-gray-400">
           AI-powered code reviews for your GitHub pull requests
         </p>
         <p className="mb-8 text-gray-300">
-          Automatically review code changes using Google's Gemini AI. Configure
+          Automatically review code changes using AI. Configure
           custom review prompts per repository and track metrics to measure the
           impact on your development workflow.
         </p>

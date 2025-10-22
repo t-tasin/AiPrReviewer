@@ -10,8 +10,13 @@ function verifyGitHubSignature(req: NextRequest, body: string): boolean {
   const signature = req.headers.get('x-hub-signature-256');
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
 
-  if (!signature || !secret) {
-    console.warn('Missing signature or secret');
+  if (!signature) {
+    console.error('[WEBHOOK] Missing x-hub-signature-256 header');
+    return false;
+  }
+
+  if (!secret) {
+    console.error('[WEBHOOK] Missing GITHUB_WEBHOOK_SECRET environment variable');
     return false;
   }
 
@@ -21,10 +26,20 @@ function verifyGitHubSignature(req: NextRequest, body: string): boolean {
     .digest('hex');
   const expectedSignature = `sha256=${hash}`;
 
-  return crypto.timingSafeEqual(
+  const isValid = crypto.timingSafeEqual(
     Buffer.from(signature),
     Buffer.from(expectedSignature)
   );
+
+  if (!isValid) {
+    console.error('[WEBHOOK] Signature verification failed');
+    console.error('[WEBHOOK] Received signature:', signature.substring(0, 20) + '...');
+    console.error('[WEBHOOK] Expected signature:', expectedSignature.substring(0, 20) + '...');
+  } else {
+    console.log('[WEBHOOK] Signature verification successful');
+  }
+
+  return isValid;
 }
 
 // Get GitHub App installation token

@@ -94,7 +94,7 @@ export default function RepositorySettings({ repository, onUpdate }: Props) {
         {/* Enable/Disable Toggle */}
         <div>
           <label className="mb-2 block text-sm font-semibold text-white">
-            Enable Gemini Reviewer for this repository
+            Enable ReviewBuddy for this repository
           </label>
           <label className="flex cursor-pointer items-center space-x-3">
             <input

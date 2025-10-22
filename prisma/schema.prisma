@@ -103,20 +103,36 @@ model RepositoryConfiguration {
 
 // ReviewMetric Model - Tracks performance metrics for each review
 model ReviewMetric {
-  id              Int       @id @default(autoincrement())
-  repositoryId    Int?
-  prNumber        Int?
-  startTime       DateTime?
-  endTime         DateTime?
-  latencyMs       Int?
-  success         Boolean?
-  errorMessage    String?   @db.Text
+  id                      Int       @id @default(autoincrement())
+  repositoryId            Int?
+  prNumber                Int?
+  startTime               DateTime?
+  endTime                 DateTime?
+  latencyMs               Int?
+  success                 Boolean?
+  errorMessage            String?   @db.Text
+
+  // Phase 3A: Line-specific comments
+  lineCommentCount        Int       @default(0)      // Number of line-specific comments posted
+
+  // Phase 3B: Enhanced metrics
+  geminiCallDurationMs    Int?      // Time spent calling Gemini API
+  githubApiDurationMs     Int?      // Time spent posting comments to GitHub
+
+  // Phase 3D: Caching metrics
+  cacheHit                Boolean   @default(false)  // Whether this review was from cache
+  filesTotalCount         Int       @default(0)      // Total files in diff
+  fileCachedCount         Int       @default(0)      // Files retrieved from cache
+
+  // Computed fields (can be calculated from above)
+  // cacheHitRatio = (fileCachedCount / filesTotalCount) if filesTotalCount > 0
 
   // Relations
-  repository      Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+  repository              Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
 
-  createdAt       DateTime  @default(now())
+  createdAt               DateTime  @default(now())
 
   @@index([repositoryId])
   @@index([createdAt])
+  @@index([success])
 }

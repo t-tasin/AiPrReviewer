@@ -284,6 +284,12 @@ export async function POST(request: NextRequest) {
   let prNumber: number | null = null;
   let lineCommentCount = 0;
 
+  // Timing metrics
+  let geminiCallStartTime = 0;
+  let geminiCallDurationMs = 0;
+  let githubApiStartTime = 0;
+  let githubApiDurationMs = 0;
+
   try {
     // Read raw body for signature verification
     const body = await request.text();
@@ -427,14 +433,20 @@ export async function POST(request: NextRequest) {
     let fallbackReview: string | null = null;
 
     try {
+      geminiCallStartTime = Date.now();
       lineComments = await getAiReviewAsJson(diff, dbRepository.configuration?.customPrompt);
-      console.log('[WEBHOOK] AI review received as JSON:', lineComments.length, 'line comments');
+      geminiCallDurationMs = Date.now() - geminiCallStartTime;
+      console.log('[WEBHOOK] AI review received as JSON:', lineComments.length, 'line comments in', geminiCallDurationMs, 'ms');
     } catch (error) {
+      geminiCallDurationMs = Date.now() - geminiCallStartTime;
       console.error('[WEBHOOK] Failed to get JSON review, attempting fallback:', error);
       try {
+        geminiCallStartTime = Date.now();
         fallbackReview = await getAiReviewAsText(diff, dbRepository.configuration?.customPrompt);
-        console.log('[WEBHOOK] Fallback AI review received, length:', fallbackReview.length, 'bytes');
+        geminiCallDurationMs = Date.now() - geminiCallStartTime;
+        console.log('[WEBHOOK] Fallback AI review received, length:', fallbackReview.length, 'bytes in', geminiCallDurationMs, 'ms');
       } catch (fallbackError) {
+        geminiCallDurationMs = Date.now() - geminiCallStartTime;
         console.error('[WEBHOOK] Failed to get AI review:', fallbackError);
         throw fallbackError;
       }
@@ -462,6 +474,7 @@ export async function POST(request: NextRequest) {
 
     let commentCount = 0;
     try {
+      githubApiStartTime = Date.now();
       if (lineComments.length > 0) {
         // Post line-specific comments
         console.log('[WEBHOOK] Posting', lineComments.length, 'line-specific comments...');
@@ -482,7 +495,10 @@ export async function POST(request: NextRequest) {
         commentCount = 1;
         console.log('[WEBHOOK] Fallback comment posted successfully');
       }
+      githubApiDurationMs = Date.now() - githubApiStartTime;
+      console.log('[WEBHOOK] GitHub API calls completed in', githubApiDurationMs, 'ms');
     } catch (error) {
+      githubApiDurationMs = Date.now() - githubApiStartTime;
       console.error('[WEBHOOK] Failed to post comments:', error);
       throw error;
     }
@@ -523,7 +539,18 @@ export async function POST(request: NextRequest) {
             latencyMs,
             success,
             errorMessage: errorMessage || null,
+            lineCommentCount,
+            geminiCallDurationMs: geminiCallDurationMs || null,
+            githubApiDurationMs: githubApiDurationMs || null,
           },
+        });
+
+        console.log('[WEBHOOK] Metrics logged:', {
+          latencyMs,
+          geminiMs: geminiCallDurationMs,
+          githubMs: githubApiDurationMs,
+          lineComments: lineCommentCount,
+          success,
         });
       } catch (logError) {
         console.error('Failed to log metric:', logError);

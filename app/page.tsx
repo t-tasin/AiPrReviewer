@@ -1,16 +1,8 @@
-import { getServerSession } from 'next-auth/next';
-import { redirect } from 'next/navigation';
+'use client';
+
 import Link from 'next/link';
 
-export const dynamic = 'force-dynamic';
-
-export default async function Home() {
-  const session = await getServerSession();
-
-  if (session) {
-    redirect('/dashboard');
-  }
-
+export default function Home() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-900">
       <div className="max-w-2xl text-center">

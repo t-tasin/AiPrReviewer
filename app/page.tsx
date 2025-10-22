@@ -2,7 +2,12 @@
 
 import Link from 'next/link';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export default function Home() {
+  console.log('[Home Page] Rendering home page');
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-900">
       <div className="max-w-2xl text-center">

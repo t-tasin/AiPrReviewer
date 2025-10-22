@@ -66,57 +66,50 @@ function getRedisConnection(): any {
   }
 }
 
-// Create or get the review queue (lazy initialization)
-let reviewQueue: Queue<ReviewPRJob> | null = null;
-let queueEvents: QueueEvents | null = null;
-let initializationError: Error | null = null;
-
+// Create a new review queue instance
+// In serverless, we create fresh instances each time to avoid state issues
 export function getReviewQueue(): Queue<ReviewPRJob> {
-  if (initializationError) {
-    throw initializationError;
-  }
+  try {
+    const redisConnection = getRedisConnection();
 
-  if (!reviewQueue) {
-    try {
-      const redisConnection = getRedisConnection();
+    console.log('[QUEUE] Creating new queue instance...');
 
-      reviewQueue = new Queue<ReviewPRJob>('pr-reviews', {
-        connection: redisConnection,
-        defaultJobOptions: {
-          attempts: 3, // Retry up to 3 times
-          backoff: {
-            type: 'exponential',
-            delay: 2000, // Start with 2s, exponentially increase
-          },
-          removeOnComplete: {
-            age: 3600, // Remove completed jobs after 1 hour
-          },
-          removeOnFail: {
-            age: 86400, // Keep failed jobs for 24 hours for debugging
-          },
+    const queue = new Queue<ReviewPRJob>('pr-reviews', {
+      connection: redisConnection,
+      defaultJobOptions: {
+        attempts: 3, // Retry up to 3 times
+        backoff: {
+          type: 'exponential',
+          delay: 2000, // Start with 2s, exponentially increase
         },
-      });
+        removeOnComplete: {
+          age: 3600, // Remove completed jobs after 1 hour
+        },
+        removeOnFail: {
+          age: 86400, // Keep failed jobs for 24 hours for debugging
+        },
+      },
+    });
 
-      // Set up queue event handlers (quietly)
-      queueEvents = new QueueEvents('pr-reviews', { connection: redisConnection });
+    console.log('[QUEUE] Queue instance created successfully');
 
-      queueEvents.on('completed', ({ jobId }) => {
-        console.log(`[QUEUE] Job ${jobId} completed`);
-      });
+    // Set up queue event handlers
+    const queueEvents = new QueueEvents('pr-reviews', { connection: redisConnection });
 
-      queueEvents.on('failed', ({ jobId, failedReason }) => {
-        console.error(`[QUEUE] Job ${jobId} failed: ${failedReason}`);
-      });
+    queueEvents.on('completed', ({ jobId }) => {
+      console.log(`[QUEUE] Job ${jobId} completed`);
+    });
 
-      // Don't log connection errors - we expect them if Redis isn't configured
-      // queueEvents.on('error', (error) => { ... });
-    } catch (error) {
-      initializationError = error instanceof Error ? error : new Error(String(error));
-      throw initializationError;
-    }
+    queueEvents.on('failed', ({ jobId, failedReason }) => {
+      console.error(`[QUEUE] Job ${jobId} failed: ${failedReason}`);
+    });
+
+    return queue;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error('[QUEUE] Failed to create queue:', msg);
+    throw error;
   }
-
-  return reviewQueue;
 }
 
 // Helper to get queue stats
@@ -143,15 +136,12 @@ export async function getQueueStats() {
   }
 }
 
-// Clean up queue resources
-export async function closeQueue() {
-  if (reviewQueue) {
-    await reviewQueue.close();
-    reviewQueue = null;
-  }
-
-  if (queueEvents) {
-    await queueEvents.close();
-    queueEvents = null;
+// Close a queue instance (call after use in serverless functions)
+export async function closeQueue(queue: Queue<ReviewPRJob>) {
+  try {
+    await queue.close();
+    console.log('[QUEUE] Queue instance closed');
+  } catch (error) {
+    console.error('[QUEUE] Error closing queue:', error);
   }
 }

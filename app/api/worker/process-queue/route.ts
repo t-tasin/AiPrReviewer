@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getReviewQueue, isRedisConfigured, ReviewPRJob } from '@/lib/queue';
+import { getReviewQueue, isRedisConfigured, closeQueue, ReviewPRJob } from '@/lib/queue';
 import { reviewPullRequest } from '@/lib/pr-reviewer';
 import { PrismaClient } from '@prisma/client';
 
@@ -15,6 +15,7 @@ const prisma = new PrismaClient();
  */
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
+  let queue = null;
 
   try {
     // Check if Redis is configured
@@ -34,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`[WORKER] Starting queue processing (maxJobs: ${maxJobs}, timeout: ${timeoutSeconds}s)`);
 
-    const queue = getReviewQueue();
+    queue = getReviewQueue();
 
     // Debug: Check queue status
     const counts = await queue.getJobCounts();
@@ -177,6 +178,10 @@ export async function POST(request: NextRequest) {
       },
       { status: 500 }
     );
+  } finally {
+    if (queue) {
+      await closeQueue(queue);
+    }
   }
 }
 
@@ -184,6 +189,7 @@ export async function POST(request: NextRequest) {
  * Health check endpoint to verify worker can access queue
  */
 export async function GET(request: NextRequest) {
+  let queue = null;
   try {
     if (!isRedisConfigured()) {
       return NextResponse.json(
@@ -192,7 +198,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const queue = getReviewQueue();
+    queue = getReviewQueue();
     const counts = await queue.getJobCounts();
 
     return NextResponse.json({
@@ -211,5 +217,9 @@ export async function GET(request: NextRequest) {
       { status: 'error', error: errorMsg },
       { status: 503 }
     );
+  } finally {
+    if (queue) {
+      await closeQueue(queue);
+    }
   }
 }

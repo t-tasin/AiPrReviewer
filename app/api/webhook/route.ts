@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { getReviewQueue, isRedisConfigured } from '@/lib/queue';
+import { getReviewQueue, isRedisConfigured, closeQueue } from '@/lib/queue';
 
 const prisma = new PrismaClient();
 
@@ -157,8 +157,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let queue = null;
     try {
-      const queue = getReviewQueue();
+      queue = getReviewQueue();
 
       const jobData = {
         body: body,
@@ -193,6 +194,10 @@ export async function POST(request: NextRequest) {
         },
         { status: 500 }
       );
+    } finally {
+      if (queue) {
+        await closeQueue(queue);
+      }
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);

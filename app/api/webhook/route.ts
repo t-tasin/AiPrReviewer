@@ -166,12 +166,17 @@ export async function POST(request: NextRequest) {
         timestamp: startTime,
       };
 
+      const jobId = `pr-${repository.id}-${pull_request.number}-${startTime}`;
       const job = await queue.add('review-pr', jobData, {
-        jobId: `pr-${repository.id}-${pull_request.number}-${startTime}`,
+        jobId,
         priority: 10,
       });
 
       console.log(`[WEBHOOK] Job queued:`, job.id);
+
+      // Verify job was stored in Redis
+      const jobCheck = await queue.getJob(jobId);
+      console.log(`[WEBHOOK] Job verification: ${jobCheck ? 'FOUND' : 'NOT FOUND'} in queue`);
       console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
 
       return NextResponse.json(

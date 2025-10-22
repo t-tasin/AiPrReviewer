@@ -35,6 +35,17 @@ export async function POST(request: NextRequest) {
     console.log(`[WORKER] Starting queue processing (maxJobs: ${maxJobs}, timeout: ${timeoutSeconds}s)`);
 
     const queue = getReviewQueue();
+
+    // Debug: Check queue status
+    const counts = await queue.getJobCounts();
+    console.log(`[WORKER] Queue status:`, {
+      waiting: counts.waiting,
+      active: counts.active,
+      completed: counts.completed,
+      failed: counts.failed,
+      delayed: counts.delayed,
+    });
+
     const results = {
       processed: 0,
       failed: 0,
@@ -46,6 +57,15 @@ export async function POST(request: NextRequest) {
     // Get waiting jobs from queue
     const waitingJobs = await queue.getJobs(['waiting'], 0, maxJobs - 1);
     console.log(`[WORKER] Found ${waitingJobs.length} waiting jobs`);
+
+    // Debug: List all waiting job IDs
+    if (waitingJobs.length === 0) {
+      const allJobs = await queue.getJobs(['waiting', 'active', 'delayed', 'failed']);
+      console.log(`[WORKER] Total jobs in queue (all states): ${allJobs.length}`);
+      if (allJobs.length > 0) {
+        console.log(`[WORKER] Job IDs:`, allJobs.map((j) => j.id));
+      }
+    }
 
     // Process jobs until timeout or maxJobs reached
     for (const job of waitingJobs) {

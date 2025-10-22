@@ -12,7 +12,7 @@ export function isRedisConfigured(): boolean {
   return !!process.env.REDIS_URL;
 }
 
-// Parse REDIS_URL if provided (Upstash format: redis://default:password@host:port)
+// Parse REDIS_URL (Upstash format: redis://default:password@host:port)
 function getRedisConnection(): any {
   const redisUrl = process.env.REDIS_URL;
 
@@ -20,8 +20,35 @@ function getRedisConnection(): any {
     throw new Error('REDIS_URL environment variable not configured');
   }
 
-  // Use Upstash Redis URL directly
-  return redisUrl;
+  console.log('[QUEUE] Parsing REDIS_URL...');
+
+  // Parse the Upstash Redis URL
+  // Format: redis://default:password@host:port
+  try {
+    const url = new URL(redisUrl);
+
+    const host = url.hostname;
+    const port = parseInt(url.port || '6379', 10);
+    const password = url.password;
+
+    if (!host) {
+      throw new Error('Invalid Redis URL: missing hostname');
+    }
+
+    console.log(`[QUEUE] Redis connection: ${host}:${port}`);
+
+    return {
+      host,
+      port,
+      password,
+      maxRetriesPerRequest: null, // Required for BullMQ
+      enableReadyCheck: false,    // Required for BullMQ
+      lazyConnect: true,          // Prevent immediate connection
+    };
+  } catch (error) {
+    console.error('[QUEUE] Failed to parse REDIS_URL:', error);
+    throw new Error(`Invalid REDIS_URL format: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 // Create or get the review queue (lazy initialization)

@@ -137,6 +137,43 @@ export async function POST(request: NextRequest) {
 
     // Check event type
     const eventType = request.headers.get('x-github-event');
+
+    // Handle installation event - save repositories to database
+    if (eventType === 'installation') {
+      const { action, installation, repositories } = payload;
+
+      if (action === 'created' && repositories) {
+        console.log(`GitHub App installed on ${repositories.length} repositories`);
+
+        for (const repo of repositories) {
+          // Check if repository already exists
+          const existingRepo = await prisma.repository.findUnique({
+            where: { githubRepoId: repo.id },
+          });
+
+          if (!existingRepo) {
+            // Create new repository record
+            await prisma.repository.create({
+              data: {
+                githubRepoId: repo.id,
+                installationId: installation.id,
+                name: repo.name,
+                fullName: repo.full_name,
+                owner: repo.owner.login,
+                userId: '', // Will be set by the user through the app
+              },
+            });
+            console.log(`Created repository record: ${repo.full_name}`);
+          }
+        }
+
+        success = true;
+        return NextResponse.json({ status: 'installation_processed' }, { status: 200 });
+      }
+
+      return NextResponse.json({ status: 'installation_ignored' }, { status: 202 });
+    }
+
     if (eventType !== 'pull_request') {
       return NextResponse.json({ status: 'ignored' }, { status: 202 });
     }

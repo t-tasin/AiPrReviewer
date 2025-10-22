@@ -12,7 +12,7 @@ export function isRedisConfigured(): boolean {
   return !!process.env.REDIS_URL;
 }
 
-// Parse REDIS_URL (Upstash format: redis://default:password@host:port)
+// Parse REDIS_URL (Upstash format: redis://default:password@host:port or rediss://default:password@host:port for TLS)
 function getRedisConnection(): any {
   const redisUrl = process.env.REDIS_URL;
 
@@ -23,21 +23,28 @@ function getRedisConnection(): any {
   console.log('[QUEUE] Parsing REDIS_URL...');
 
   // Parse the Upstash Redis URL
-  // Format: redis://default:password@host:port
+  // Format: redis://default:password@host:port (plain)
+  // Format: rediss://default:password@host:port (TLS)
   try {
     const url = new URL(redisUrl);
-
+    const protocol = url.protocol; // "redis:" or "rediss:"
     const host = url.hostname;
-    const port = parseInt(url.port || '6379', 10);
+    let port = parseInt(url.port || '6379', 10);
     const password = url.password;
 
     if (!host) {
       throw new Error('Invalid Redis URL: missing hostname');
     }
 
-    console.log(`[QUEUE] Redis connection: ${host}:${port}`);
+    // Detect TLS requirement
+    const useTls = protocol === 'rediss:';
+    if (useTls && !url.port) {
+      port = 6380; // Upstash uses 6380 for TLS
+    }
 
-    return {
+    console.log(`[QUEUE] Redis connection: ${host}:${port} (TLS: ${useTls})`);
+
+    const connection: any = {
       host,
       port,
       password,
@@ -45,6 +52,14 @@ function getRedisConnection(): any {
       enableReadyCheck: false,    // Required for BullMQ
       lazyConnect: true,          // Prevent immediate connection
     };
+
+    // Enable TLS for rediss:// URLs
+    if (useTls) {
+      connection.tls = {}; // Empty object enables TLS with default options
+      console.log('[QUEUE] TLS enabled for Redis connection');
+    }
+
+    return connection;
   } catch (error) {
     console.error('[QUEUE] Failed to parse REDIS_URL:', error);
     throw new Error(`Invalid REDIS_URL format: ${error instanceof Error ? error.message : String(error)}`);

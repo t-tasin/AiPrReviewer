@@ -14,6 +14,7 @@
     "dotenv-safe": "^9.1.0",
     "next": "16.0.0",
     "next-auth": "^4.24.11",
+    "parse-diff": "^0.11.1",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },

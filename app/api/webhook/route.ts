@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
+import parseDiff from 'parse-diff';
 
 const prisma = new PrismaClient();
 
@@ -62,8 +63,103 @@ async function getInstallationToken(): Promise<string> {
   }
 }
 
-// Get AI review from Gemini with retry logic
-async function getAiReview(
+// Type definition for line-specific comments
+interface LineComment {
+  file: string;
+  line: number;
+  comment: string;
+}
+
+// Get AI review from Gemini with retry logic - returns JSON format
+async function getAiReviewAsJson(
+  diff: string,
+  customPrompt?: string | null
+): Promise<LineComment[]> {
+  const prompt = customPrompt
+    ? `${customPrompt}\n\nReview this diff and respond with ONLY a valid JSON array.
+Format: [{"file": "path/to/file", "line": LINE_NUMBER, "comment": "specific feedback for this line"}]
+Focus on actionable feedback. Include only lines that need improvement.
+
+Diff:
+\`\`\`diff
+${diff}
+\`\`\``
+    : `You are a senior software engineer providing line-by-line code review.
+Review the diff and respond with ONLY a valid JSON array.
+Format: [{"file": "path/to/file", "line": LINE_NUMBER, "comment": "specific feedback"}]
+Focus on: potential bugs, code clarity, best practices, security issues.
+Include only lines that need improvement. Empty array if no issues.
+
+Diff:
+\`\`\`diff
+${diff}
+\`\`\``;
+
+  const modelName = 'gemini-2.5-flash';
+  const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+  };
+
+  // Retry logic for transient failures (503, 429, timeouts)
+  const maxRetries = 3;
+  let lastError;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await axios.post(geminiUrl, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 30000,
+      });
+
+      if (
+        response.data &&
+        response.data.candidates &&
+        response.data.candidates[0]?.content
+      ) {
+        const responseText = response.data.candidates[0].content.parts[0].text;
+
+        // Try to parse JSON from response
+        const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed)) {
+            return parsed;
+          }
+        }
+
+        // If JSON parsing fails, return empty array and fall back to single comment
+        console.log('[WEBHOOK] Failed to parse JSON from Gemini, falling back to text');
+        return [];
+      }
+
+      throw new Error('Invalid response structure from Gemini');
+    } catch (error) {
+      lastError = error;
+      const isAxiosError = axios.isAxiosError(error);
+      const status = isAxiosError ? error.response?.status : null;
+      const isRetryable =
+        !isAxiosError ||
+        (status && (status === 429 || status === 503 || status >= 500));
+
+      if (!isRetryable || attempt === maxRetries - 1) {
+        throw error;
+      }
+
+      const delayMs = Math.pow(2, attempt) * 1000;
+      console.log(
+        `[WEBHOOK] Gemini API error (attempt ${attempt + 1}/${maxRetries}), retrying in ${delayMs}ms...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw lastError || new Error('Failed to get AI review after retries');
+}
+
+// Fallback: Get single comment review
+async function getAiReviewAsText(
   diff: string,
   customPrompt?: string | null
 ): Promise<string> {
@@ -86,7 +182,6 @@ ${diff}
     contents: [{ parts: [{ text: prompt }] }],
   };
 
-  // Retry logic for transient failures (503, 429, timeouts)
   const maxRetries = 3;
   let lastError;
 
@@ -94,7 +189,7 @@ ${diff}
     try {
       const response = await axios.post(geminiUrl, payload, {
         headers: { 'Content-Type': 'application/json' },
-        timeout: 30000, // 30 second timeout
+        timeout: 30000,
       });
 
       if (
@@ -119,7 +214,6 @@ ${diff}
         throw error;
       }
 
-      // Exponential backoff: 1s, 2s, 4s
       const delayMs = Math.pow(2, attempt) * 1000;
       console.log(
         `[WEBHOOK] Gemini API error (attempt ${attempt + 1}/${maxRetries}), retrying in ${delayMs}ms...`
@@ -131,7 +225,7 @@ ${diff}
   throw lastError || new Error('Failed to get AI review after retries');
 }
 
-// Post comment to GitHub PR
+// Post single comment to GitHub PR
 async function postCommentToPR(
   commentsUrl: string,
   commentBody: string,
@@ -149,12 +243,46 @@ async function postCommentToPR(
   );
 }
 
+// Post line-specific comments to GitHub PR
+async function postLineCommentsToPR(
+  commentsUrl: string,
+  lineComments: LineComment[],
+  token: string
+): Promise<number> {
+  let successCount = 0;
+
+  for (const lineComment of lineComments) {
+    try {
+      const commentBody = `**${lineComment.file}** (line ${lineComment.line})\n\n${lineComment.comment}`;
+
+      await axios.post(
+        commentsUrl,
+        { body: commentBody },
+        {
+          headers: {
+            Authorization: `token ${token}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        }
+      );
+
+      successCount++;
+      console.log(`[WEBHOOK] Posted line comment for ${lineComment.file}:${lineComment.line}`);
+    } catch (error) {
+      console.error(`[WEBHOOK] Failed to post line comment for ${lineComment.file}:${lineComment.line}:`, error);
+    }
+  }
+
+  return successCount;
+}
+
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
   let success = false;
   let errorMessage = '';
   let repoId: number | null = null;
   let prNumber: number | null = null;
+  let lineCommentCount = 0;
 
   try {
     // Read raw body for signature verification
@@ -293,15 +421,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: 'no_diff' }, { status: 200 });
     }
 
-    // Get AI review with custom prompt if available
-    console.log('[WEBHOOK] Sending diff to Gemini API for review...');
-    let review;
+    // Get AI review with custom prompt if available (try JSON format first)
+    console.log('[WEBHOOK] Sending diff to Gemini API for line-specific review...');
+    let lineComments: LineComment[] = [];
+    let fallbackReview: string | null = null;
+
     try {
-      review = await getAiReview(diff, dbRepository.configuration?.customPrompt);
-      console.log('[WEBHOOK] AI review received, length:', review.length, 'bytes');
+      lineComments = await getAiReviewAsJson(diff, dbRepository.configuration?.customPrompt);
+      console.log('[WEBHOOK] AI review received as JSON:', lineComments.length, 'line comments');
     } catch (error) {
-      console.error('[WEBHOOK] Failed to get AI review:', error);
-      throw error;
+      console.error('[WEBHOOK] Failed to get JSON review, attempting fallback:', error);
+      try {
+        fallbackReview = await getAiReviewAsText(diff, dbRepository.configuration?.customPrompt);
+        console.log('[WEBHOOK] Fallback AI review received, length:', fallbackReview.length, 'bytes');
+      } catch (fallbackError) {
+        console.error('[WEBHOOK] Failed to get AI review:', fallbackError);
+        throw fallbackError;
+      }
     }
 
     // Get token and post comment
@@ -321,18 +457,39 @@ export async function POST(request: NextRequest) {
       throw error;
     }
 
-    console.log('[WEBHOOK] Posting comment to PR...');
+    console.log('[WEBHOOK] Posting review to PR...');
     console.log('[WEBHOOK] Comments URL:', pull_request.comments_url);
+
+    let commentCount = 0;
     try {
-      await postCommentToPR(pull_request.comments_url, review, token);
-      console.log('[WEBHOOK] Comment posted successfully');
+      if (lineComments.length > 0) {
+        // Post line-specific comments
+        console.log('[WEBHOOK] Posting', lineComments.length, 'line-specific comments...');
+        commentCount = await postLineCommentsToPR(pull_request.comments_url, lineComments, token);
+        lineCommentCount = commentCount; // Track for metrics
+        console.log('[WEBHOOK]', commentCount, 'line-specific comments posted successfully');
+
+        // Also post a summary comment
+        if (commentCount > 0) {
+          const summary = `### 🤖 AI Code Review Complete\n\nFound and commented on ${commentCount} line(s) that may need attention.`;
+          await postCommentToPR(pull_request.comments_url, summary, token);
+          console.log('[WEBHOOK] Summary comment posted');
+        }
+      } else if (fallbackReview) {
+        // Fallback to single comment if JSON parsing failed
+        console.log('[WEBHOOK] Using fallback review format...');
+        await postCommentToPR(pull_request.comments_url, fallbackReview, token);
+        commentCount = 1;
+        console.log('[WEBHOOK] Fallback comment posted successfully');
+      }
     } catch (error) {
-      console.error('[WEBHOOK] Failed to post comment:', error);
+      console.error('[WEBHOOK] Failed to post comments:', error);
       throw error;
     }
 
     success = true;
     console.log('[WEBHOOK] Successfully completed review workflow');
+    console.log(`[WEBHOOK] Review complete: ${lineCommentCount} line comments posted`);
 
     return NextResponse.json({ status: 'success' }, { status: 200 });
   } catch (error) {

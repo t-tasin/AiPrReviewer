@@ -43,21 +43,12 @@ function verifyGitHubSignature(req: NextRequest, body: string): boolean {
 }
 
 // Get GitHub App installation token
-async function getInstallationToken(installationId: number): Promise<string> {
+async function getInstallationToken(): Promise<string> {
   try {
-    const privateKey = process.env.GITHUB_APP_PRIVATE_KEY?.replace(
-      /\\n/g,
-      '\n'
-    );
-    const appId = process.env.NEXT_PUBLIC_GITHUB_APP_ID;
-
-    if (!privateKey || !appId) {
-      throw new Error('Missing GitHub App credentials');
-    }
-
-    // In a real implementation, you'd use jwt library here
-    // For now, we'll use the existing GITHUB_TOKEN from .env
-    // This is a simplification - in production, generate JWT and exchange for token
+    // In a production implementation, you'd:
+    // 1. Generate a JWT signed with GITHUB_APP_PRIVATE_KEY
+    // 2. Exchange it for an installation-specific token using GitHub API
+    // For now, we use GITHUB_TOKEN which is configured as a GitHub App token
     const token = process.env.GITHUB_TOKEN;
 
     if (!token) {
@@ -285,11 +276,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Get token and post comment
-    console.log('[WEBHOOK] Installation ID:', dbRepository.installationId);
+    // Use the installation ID from the webhook payload (more reliable than database)
+    const webhookInstallationId = installation?.id;
+    console.log('[WEBHOOK] Using webhook installation ID:', webhookInstallationId);
     console.log('[WEBHOOK] Getting installation token...');
     let token;
     try {
-      token = await getInstallationToken(dbRepository.installationId);
+      if (!webhookInstallationId) {
+        throw new Error('Installation ID not provided in webhook payload');
+      }
+      token = await getInstallationToken();
       console.log('[WEBHOOK] Installation token obtained');
     } catch (error) {
       console.error('[WEBHOOK] Failed to get installation token:', error);

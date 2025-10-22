@@ -6,6 +6,7 @@
 import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
 import parseDiff from 'parse-diff';
+import { getCachedReview, cacheReview, hashFileContent } from './cache';
 
 const prisma = new PrismaClient();
 
@@ -22,6 +23,70 @@ export interface ReviewMetrics {
   lineCommentCount: number;
   success: boolean;
   errorMessage: string | null;
+  filesTotalCount?: number;
+  fileCachedCount?: number;
+}
+
+interface DiffFile {
+  path: string;
+  contentHash: string;
+  fullDiff: string;
+  lines: string[];
+}
+
+/**
+ * Parse diff into file-level diffs and compute content hashes
+ * Returns array of files with their diffs and content hashes
+ */
+function parseAndHashDiff(fullDiff: string): DiffFile[] {
+  const files: DiffFile[] = [];
+  const lines = fullDiff.split('\n');
+
+  let currentFile: { path: string; lines: string[] } | null = null;
+  const fileMap: { [path: string]: string[] } = {};
+
+  for (const line of lines) {
+    // Detect file header (e.g., "--- a/path/to/file" or "diff --git a/path b/path")
+    if (line.startsWith('diff --git a/') || line.startsWith('--- a/')) {
+      if (currentFile && currentFile.lines.length > 0) {
+        fileMap[currentFile.path] = currentFile.lines;
+      }
+
+      // Extract file path from diff header
+      let path = '';
+      if (line.startsWith('diff --git a/')) {
+        const match = line.match(/diff --git a\/(.+) b\/(.+)$/);
+        path = match ? match[1] : line;
+      } else if (line.startsWith('--- a/')) {
+        path = line.substring(6); // Remove "--- a/"
+      }
+
+      currentFile = { path: path.trim(), lines: [] };
+    }
+
+    if (currentFile) {
+      currentFile.lines.push(line);
+    }
+  }
+
+  // Don't forget the last file
+  if (currentFile && currentFile.lines.length > 0) {
+    fileMap[currentFile.path] = currentFile.lines;
+  }
+
+  // Create DiffFile objects with hashes
+  for (const [path, fileLines] of Object.entries(fileMap)) {
+    const fullDiff = fileLines.join('\n');
+    const contentHash = hashFileContent(fullDiff);
+    files.push({
+      path,
+      contentHash,
+      fullDiff,
+      lines: fileLines,
+    });
+  }
+
+  return files;
 }
 
 /**
@@ -318,30 +383,95 @@ export async function reviewPullRequest(payload: any): Promise<ReviewMetrics> {
         lineCommentCount: 0,
         success: true,
         errorMessage: null,
+        filesTotalCount: 0,
+        fileCachedCount: 0,
       };
     }
 
+    // Parse diff into file-level diffs for caching
+    console.log('[REVIEWER] Parsing diff and computing file hashes...');
+    const diffFiles = parseAndHashDiff(diff);
+    const filesTotalCount = diffFiles.length;
+    let fileCachedCount = 0;
+    let cachedLineComments: LineComment[] = [];
+    let filesToReview: DiffFile[] = [];
+
+    // Check cache for each file
+    for (const file of diffFiles) {
+      const cached = await getCachedReview(dbRepository.id, file.path, file.contentHash);
+      if (cached) {
+        fileCachedCount++;
+        // Parse cached review (it's a JSON string with line comments)
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) {
+            cachedLineComments.push(...parsed);
+          }
+        } catch {
+          // If cached review isn't JSON, skip it (shouldn't happen)
+        }
+      } else {
+        filesToReview.push(file);
+      }
+    }
+
+    console.log(`[REVIEWER] Cache status: ${fileCachedCount}/${filesTotalCount} files cached`);
+
     // Get AI review
     console.log('[REVIEWER] Calling Gemini API for review...');
-    let lineComments: LineComment[] = [];
+    let lineComments: LineComment[] = [...cachedLineComments];
     let fallbackReview: string | null = null;
 
-    try {
-      const geminiStartTime = Date.now();
-      lineComments = await getAiReviewAsJson(diff, dbRepository.configuration?.customPrompt);
-      geminiCallDurationMs = Date.now() - geminiStartTime;
-      console.log('[REVIEWER] AI review received as JSON:', lineComments.length, 'line comments in', geminiCallDurationMs, 'ms');
-    } catch (error) {
-      geminiCallDurationMs = Date.now() - startTime;
-      console.error('[REVIEWER] Failed to get JSON review, attempting fallback:', error);
+    // Only call Gemini if there are files to review
+    if (filesToReview.length > 0) {
+      const diffToReview = filesToReview.map((f) => f.fullDiff).join('\n');
+
       try {
         const geminiStartTime = Date.now();
-        fallbackReview = await getAiReviewAsText(diff, dbRepository.configuration?.customPrompt);
+        const newComments = await getAiReviewAsJson(
+          diffToReview,
+          dbRepository.configuration?.customPrompt
+        );
         geminiCallDurationMs = Date.now() - geminiStartTime;
-        console.log('[REVIEWER] Fallback AI review received in', geminiCallDurationMs, 'ms');
-      } catch (fallbackError) {
-        throw fallbackError;
+
+        // Cache the new reviews
+        for (const comment of newComments) {
+          const file = filesToReview.find((f) => f.path === comment.file);
+          if (file) {
+            await cacheReview(
+              dbRepository.id,
+              file.path,
+              file.contentHash,
+              JSON.stringify(newComments.filter((c) => c.file === comment.file))
+            );
+          }
+        }
+
+        lineComments.push(...newComments);
+        console.log(
+          '[REVIEWER] AI review received as JSON:',
+          newComments.length,
+          'new line comments in',
+          geminiCallDurationMs,
+          'ms'
+        );
+      } catch (error) {
+        geminiCallDurationMs = Date.now() - startTime;
+        console.error('[REVIEWER] Failed to get JSON review, attempting fallback:', error);
+        try {
+          const geminiStartTime = Date.now();
+          fallbackReview = await getAiReviewAsText(
+            diffToReview,
+            dbRepository.configuration?.customPrompt
+          );
+          geminiCallDurationMs = Date.now() - geminiStartTime;
+          console.log('[REVIEWER] Fallback AI review received in', geminiCallDurationMs, 'ms');
+        } catch (fallbackError) {
+          throw fallbackError;
+        }
       }
+    } else {
+      console.log('[REVIEWER] All files cached, no Gemini API call needed');
     }
 
     // Get token
@@ -375,6 +505,8 @@ export async function reviewPullRequest(payload: any): Promise<ReviewMetrics> {
       lineCommentCount,
       success,
       errorMessage: null,
+      filesTotalCount,
+      fileCachedCount,
     };
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -387,6 +519,8 @@ export async function reviewPullRequest(payload: any): Promise<ReviewMetrics> {
       lineCommentCount,
       success: false,
       errorMessage,
+      filesTotalCount: 0,
+      fileCachedCount: 0,
     };
   }
 }

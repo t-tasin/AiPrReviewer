@@ -79,6 +79,7 @@ model Repository {
   user                      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   configuration             RepositoryConfiguration?
   reviewMetrics             ReviewMetric[]
+  reviewCaches              ReviewCache[] @relation("ReviewCaches")
 
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
@@ -99,6 +100,26 @@ model RepositoryConfiguration {
 
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
+}
+
+// ReviewCache Model - Stores cached reviews by file content hash
+model ReviewCache {
+  id                      Int       @id @default(autoincrement())
+  repositoryId            Int
+  filePath                String    // e.g., "src/utils/helpers.ts"
+  contentHash             String    // SHA-256 hash of file content
+  review                  String    @db.Text  // Cached review comment
+
+  // Relations
+  repository              Repository @relation("ReviewCaches", fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  // Unique constraint: one cache entry per file+hash per repo
+  @@unique([repositoryId, filePath, contentHash])
+  @@index([repositoryId])
+  @@index([contentHash])
 }
 
 // ReviewMetric Model - Tracks performance metrics for each review

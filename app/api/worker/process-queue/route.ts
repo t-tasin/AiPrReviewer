@@ -89,6 +89,9 @@ export async function POST(request: NextRequest) {
                 lineCommentCount: metrics.lineCommentCount,
                 geminiCallDurationMs: metrics.geminiCallDurationMs,
                 githubApiDurationMs: metrics.githubApiDurationMs,
+                filesTotalCount: metrics.filesTotalCount || 0,
+                fileCachedCount: metrics.fileCachedCount || 0,
+                cacheHit: (metrics.fileCachedCount || 0) > 0,
               },
             });
 

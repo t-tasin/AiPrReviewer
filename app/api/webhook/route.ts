@@ -153,39 +153,44 @@ export async function POST(request: NextRequest) {
     // Check event type
     const eventType = request.headers.get('x-github-event');
 
-    // Handle installation event - save repositories to database
+    // Handle installation event - update repositories with correct installation ID
     if (eventType === 'installation') {
       const { action, installation, repositories } = payload;
 
-      if (action === 'created' && repositories) {
-        console.log(`GitHub App installed on ${repositories.length} repositories`);
+      console.log('[WEBHOOK] Installation event received');
+      console.log('[WEBHOOK] Installation action:', action);
+      console.log('[WEBHOOK] Installation ID:', installation.id);
+      console.log('[WEBHOOK] Number of repositories:', repositories?.length || 0);
+
+      if ((action === 'created' || action === 'added') && repositories) {
+        console.log(`[WEBHOOK] Processing ${repositories.length} repositories for installation`);
 
         for (const repo of repositories) {
-          // Check if repository already exists
-          const existingRepo = await prisma.repository.findUnique({
-            where: { githubRepoId: repo.id },
-          });
-
-          if (!existingRepo) {
-            // Create new repository record
-            await prisma.repository.create({
+          try {
+            // Update existing repository with installation ID
+            const updated = await prisma.repository.updateMany({
+              where: { githubRepoId: repo.id },
               data: {
-                githubRepoId: repo.id,
                 installationId: installation.id,
-                name: repo.name,
-                fullName: repo.full_name,
-                owner: repo.owner.login,
-                userId: '', // Will be set by the user through the app
               },
             });
-            console.log(`Created repository record: ${repo.full_name}`);
+
+            if (updated.count > 0) {
+              console.log(`[WEBHOOK] Updated repository ${repo.full_name} with installation ID ${installation.id}`);
+            } else {
+              console.log(`[WEBHOOK] Repository ${repo.full_name} not found in database - it may be synced later`);
+            }
+          } catch (error) {
+            console.error(`[WEBHOOK] Failed to update repository ${repo.full_name}:`, error);
           }
         }
 
         success = true;
+        console.log('[WEBHOOK] Installation event processed successfully');
         return NextResponse.json({ status: 'installation_processed' }, { status: 200 });
       }
 
+      console.log('[WEBHOOK] Installation event ignored');
       return NextResponse.json({ status: 'installation_ignored' }, { status: 202 });
     }
 

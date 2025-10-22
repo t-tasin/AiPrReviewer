@@ -145,41 +145,48 @@ export async function POST(request: NextRequest) {
     // ============================================
     // QUEUE THE REVIEW JOB (Fast, return immediately)
     // ============================================
-    if (isRedisConfigured()) {
-      try {
-        const queue = getReviewQueue();
-
-        const jobData = {
-          body: body,
-          signature: request.headers.get('x-hub-signature-256') || '',
-          timestamp: startTime,
-        };
-
-        const job = await queue.add('review-pr', jobData, {
-          jobId: `pr-${repository.id}-${pull_request.number}-${startTime}`,
-          priority: 10,
-        });
-
-        console.log(`[WEBHOOK] Job queued:`, job.id);
-        console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
-
-        return NextResponse.json(
-          { status: 'queued', jobId: job.id },
-          { status: 202 }
-        );
-      } catch (queueError) {
-        console.error('[WEBHOOK] Failed to queue job:', queueError);
-        return NextResponse.json(
-          { error: 'Failed to queue review job' },
-          { status: 500 }
-        );
-      }
-    } else {
-      // Fallback: Redis not configured, return error
-      console.error('[WEBHOOK] Redis not configured for async processing');
+    if (!isRedisConfigured()) {
+      console.error('[WEBHOOK] Redis not configured - set REDIS_URL environment variable');
       return NextResponse.json(
-        { error: 'Async processing not configured (Redis required)' },
+        {
+          error: 'Async processing not configured',
+          message: 'Set REDIS_URL environment variable to enable PR review queuing',
+          status: 'redis_not_configured',
+        },
         { status: 503 }
+      );
+    }
+
+    try {
+      const queue = getReviewQueue();
+
+      const jobData = {
+        body: body,
+        signature: request.headers.get('x-hub-signature-256') || '',
+        timestamp: startTime,
+      };
+
+      const job = await queue.add('review-pr', jobData, {
+        jobId: `pr-${repository.id}-${pull_request.number}-${startTime}`,
+        priority: 10,
+      });
+
+      console.log(`[WEBHOOK] Job queued:`, job.id);
+      console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
+
+      return NextResponse.json(
+        { status: 'queued', jobId: job.id },
+        { status: 202 }
+      );
+    } catch (queueError) {
+      const errorMsg = queueError instanceof Error ? queueError.message : String(queueError);
+      console.error('[WEBHOOK] Failed to queue job:', errorMsg);
+      return NextResponse.json(
+        {
+          error: 'Failed to queue review job',
+          message: errorMsg,
+        },
+        { status: 500 }
       );
     }
   } catch (error) {

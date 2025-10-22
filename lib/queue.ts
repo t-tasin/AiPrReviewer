@@ -7,86 +7,74 @@ export interface ReviewPRJob {
   timestamp: number; // When job was created
 }
 
+// Check if Redis is configured
+export function isRedisConfigured(): boolean {
+  return !!process.env.REDIS_URL;
+}
+
 // Parse REDIS_URL if provided (Upstash format: redis://default:password@host:port)
 function getRedisConnection(): any {
   const redisUrl = process.env.REDIS_URL;
 
-  if (redisUrl) {
-    // Use Upstash Redis URL directly
-    return redisUrl;
+  if (!redisUrl) {
+    throw new Error('REDIS_URL environment variable not configured');
   }
 
-  // Fallback to individual environment variables
-  const connection = {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT || '6379'),
-    db: 0,
-    maxRetriesPerRequest: null, // Required for BullMQ
-    enableReadyCheck: false, // Required for BullMQ
-  } as any;
-
-  if (process.env.REDIS_PASSWORD) {
-    connection.password = process.env.REDIS_PASSWORD;
-  }
-
-  return connection;
+  // Use Upstash Redis URL directly
+  return redisUrl;
 }
 
-// Redis connection configuration
-const redisConnection = getRedisConnection();
-
-// Create or get the review queue
+// Create or get the review queue (lazy initialization)
 let reviewQueue: Queue<ReviewPRJob> | null = null;
 let queueEvents: QueueEvents | null = null;
+let initializationError: Error | null = null;
 
 export function getReviewQueue(): Queue<ReviewPRJob> {
+  if (initializationError) {
+    throw initializationError;
+  }
+
   if (!reviewQueue) {
-    reviewQueue = new Queue<ReviewPRJob>('pr-reviews', {
-      connection: redisConnection,
-      defaultJobOptions: {
-        attempts: 3, // Retry up to 3 times
-        backoff: {
-          type: 'exponential',
-          delay: 2000, // Start with 2s, exponentially increase
+    try {
+      const redisConnection = getRedisConnection();
+
+      reviewQueue = new Queue<ReviewPRJob>('pr-reviews', {
+        connection: redisConnection,
+        defaultJobOptions: {
+          attempts: 3, // Retry up to 3 times
+          backoff: {
+            type: 'exponential',
+            delay: 2000, // Start with 2s, exponentially increase
+          },
+          removeOnComplete: {
+            age: 3600, // Remove completed jobs after 1 hour
+          },
+          removeOnFail: {
+            age: 86400, // Keep failed jobs for 24 hours for debugging
+          },
         },
-        removeOnComplete: {
-          age: 3600, // Remove completed jobs after 1 hour
-        },
-        removeOnFail: {
-          age: 86400, // Keep failed jobs for 24 hours for debugging
-        },
-      },
-    });
+      });
 
-    // Set up queue event handlers
-    queueEvents = new QueueEvents('pr-reviews', { connection: redisConnection });
+      // Set up queue event handlers (quietly)
+      queueEvents = new QueueEvents('pr-reviews', { connection: redisConnection });
 
-    queueEvents.on('completed', ({ jobId }) => {
-      console.log(`[QUEUE] Job ${jobId} completed successfully`);
-    });
+      queueEvents.on('completed', ({ jobId }) => {
+        console.log(`[QUEUE] Job ${jobId} completed`);
+      });
 
-    queueEvents.on('failed', ({ jobId, failedReason }) => {
-      console.error(`[QUEUE] Job ${jobId} failed: ${failedReason}`);
-    });
+      queueEvents.on('failed', ({ jobId, failedReason }) => {
+        console.error(`[QUEUE] Job ${jobId} failed: ${failedReason}`);
+      });
 
-    queueEvents.on('error', (error) => {
-      console.error('[QUEUE] Queue error:', error);
-    });
+      // Don't log connection errors - we expect them if Redis isn't configured
+      // queueEvents.on('error', (error) => { ... });
+    } catch (error) {
+      initializationError = error instanceof Error ? error : new Error(String(error));
+      throw initializationError;
+    }
   }
 
   return reviewQueue;
-}
-
-// Helper to check if Redis is configured
-export function isRedisConfigured(): boolean {
-  const redisUrl = process.env.REDIS_URL;
-  if (redisUrl) {
-    // If REDIS_URL is provided (Upstash), use it
-    return true;
-  }
-
-  // Otherwise check individual connection params
-  return !!(process.env.REDIS_HOST || process.env.REDIS_PASSWORD);
 }
 
 // Helper to get queue stats

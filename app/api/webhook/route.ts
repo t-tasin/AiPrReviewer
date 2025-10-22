@@ -62,7 +62,7 @@ async function getInstallationToken(): Promise<string> {
   }
 }
 
-// Get AI review from Gemini
+// Get AI review from Gemini with retry logic
 async function getAiReview(
   diff: string,
   customPrompt?: string | null
@@ -86,20 +86,49 @@ ${diff}
     contents: [{ parts: [{ text: prompt }] }],
   };
 
-  const response = await axios.post(geminiUrl, payload, {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  // Retry logic for transient failures (503, 429, timeouts)
+  const maxRetries = 3;
+  let lastError;
 
-  if (
-    response.data &&
-    response.data.candidates &&
-    response.data.candidates[0]?.content
-  ) {
-    const reviewText = response.data.candidates[0].content.parts[0].text;
-    return `### 🤖 AI Code Review\n\n${reviewText}`;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await axios.post(geminiUrl, payload, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 30000, // 30 second timeout
+      });
+
+      if (
+        response.data &&
+        response.data.candidates &&
+        response.data.candidates[0]?.content
+      ) {
+        const reviewText = response.data.candidates[0].content.parts[0].text;
+        return `### 🤖 AI Code Review\n\n${reviewText}`;
+      }
+
+      throw new Error('Invalid response structure from Gemini');
+    } catch (error) {
+      lastError = error;
+      const isAxiosError = axios.isAxiosError(error);
+      const status = isAxiosError ? error.response?.status : null;
+      const isRetryable =
+        !isAxiosError ||
+        (status && (status === 429 || status === 503 || status >= 500));
+
+      if (!isRetryable || attempt === maxRetries - 1) {
+        throw error;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s
+      const delayMs = Math.pow(2, attempt) * 1000;
+      console.log(
+        `[WEBHOOK] Gemini API error (attempt ${attempt + 1}/${maxRetries}), retrying in ${delayMs}ms...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 
-  throw new Error('Invalid response structure from Gemini');
+  throw lastError || new Error('Failed to get AI review after retries');
 }
 
 // Post comment to GitHub PR

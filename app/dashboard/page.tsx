@@ -99,7 +99,7 @@ export default function DashboardPage() {
                   <p className="mt-2 text-xs text-gray-400">
                     Install the app on{' '}
                     <a
-                      href="https://github.com/apps/ai-pr-reviewer-s"
+                      href="https://github.com/apps/reviewbuddy-s/installations/new"
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-blue-400 hover:underline"

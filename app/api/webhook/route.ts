@@ -180,17 +180,18 @@ export async function POST(request: NextRequest) {
       const jobCheck = await queue.getJob(jobId);
       console.log(`[WEBHOOK] Job verification: ${jobCheck ? 'FOUND' : 'NOT FOUND'} in queue`);
 
-      // Trigger GitHub Actions workflow to process queue immediately (non-blocking)
-      // This happens in background without blocking the webhook response
-      (async () => {
+      // Trigger GitHub Actions workflow to process queue immediately (fire and forget, but logged)
+      const dispatchWorkflow = async () => {
         try {
           const token = process.env.GITHUB_TOKEN;
           if (!token) {
-            console.warn('[WEBHOOK] GITHUB_TOKEN not set, skipping workflow dispatch');
+            console.error('[WEBHOOK] GITHUB_TOKEN not set, cannot dispatch workflow');
             return;
           }
 
-          await axios.post(
+          console.log('[WEBHOOK] Attempting to dispatch workflow...');
+
+          const response = await axios.post(
             'https://api.github.com/repos/t-tasin/AiPrReviewer/dispatches',
             { event_type: 'process-review-queue' },
             {
@@ -198,14 +199,23 @@ export async function POST(request: NextRequest) {
                 Authorization: `token ${token}`,
                 Accept: 'application/vnd.github.v3+json',
               },
+              timeout: 5000,
             }
           );
 
-          console.log('[WEBHOOK] GitHub Actions workflow dispatched');
+          console.log('[WEBHOOK] GitHub Actions workflow dispatched successfully (status: ' + response.status + ')');
         } catch (error) {
-          console.error('[WEBHOOK] Failed to dispatch workflow:', error instanceof Error ? error.message : String(error));
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          console.error('[WEBHOOK] Failed to dispatch workflow:', errorMsg);
+          if (axios.isAxiosError(error)) {
+            console.error('[WEBHOOK] Response status:', error.response?.status);
+            console.error('[WEBHOOK] Response data:', error.response?.data);
+          }
         }
-      })();
+      };
+
+      // Fire workflow dispatch without blocking webhook response
+      dispatchWorkflow().catch((err) => console.error('[WEBHOOK] Workflow dispatch error:', err));
 
       console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
 

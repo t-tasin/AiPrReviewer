@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getReviewQueue, isRedisConfigured, closeQueue, ReviewPRJob } from '@/lib/queue';
 import { reviewPullRequest } from '@/lib/pr-reviewer';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '@/lib/prisma';
 
 /**
  * Process one or more jobs from the review queue

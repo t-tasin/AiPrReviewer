@@ -4,11 +4,9 @@
  */
 
 import axios from 'axios';
-import { PrismaClient } from '@prisma/client';
 import parseDiff from 'parse-diff';
+import { prisma } from './prisma';
 import { getCachedReview, cacheReview, hashFileContent } from './cache';
-
-const prisma = new PrismaClient();
 
 export interface LineComment {
   file: string;

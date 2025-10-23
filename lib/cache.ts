@@ -1,7 +1,5 @@
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from './prisma';
 
 /**
  * Calculate SHA-256 hash of file content

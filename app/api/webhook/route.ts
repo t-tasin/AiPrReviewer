@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import axios from 'axios';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
 import { getReviewQueue, isRedisConfigured, closeQueue } from '@/lib/queue';
-
-const prisma = new PrismaClient();
 
 // Verify GitHub webhook signature
 function verifyGitHubSignature(req: NextRequest, body: string): boolean {

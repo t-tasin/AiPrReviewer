@@ -11,6 +11,8 @@ export function hashFileContent(content: string): string {
 /**
  * Get cached review for a file by content hash
  * Returns the cached review comment or null if not found
+ * Note: We find by contentHash first (content-based caching), ignoring filename
+ * This way the same code in different files/PRs all share the cache
  */
 export async function getCachedReview(
   repositoryId: number,
@@ -18,18 +20,17 @@ export async function getCachedReview(
   contentHash: string
 ): Promise<string | null> {
   try {
-    const cache = await prisma.reviewCache.findUnique({
+    // Look for ANY file with this content hash in the same repo
+    // This allows same code in different filenames to share cache
+    const cache = await prisma.reviewCache.findFirst({
       where: {
-        repositoryId_filePath_contentHash: {
-          repositoryId,
-          filePath,
-          contentHash,
-        },
+        repositoryId,
+        contentHash,
       },
     });
 
     if (cache) {
-      console.log(`[CACHE] Hit: ${filePath} (hash: ${contentHash.substring(0, 8)}...)`);
+      console.log(`[CACHE] Hit: ${filePath} (hash: ${contentHash.substring(0, 8)}... from ${cache.filePath})`);
       return cache.review;
     }
 

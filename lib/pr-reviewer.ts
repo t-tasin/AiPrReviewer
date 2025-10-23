@@ -487,6 +487,10 @@ export async function reviewPullRequest(payload: any): Promise<ReviewMetrics> {
     } else if (fallbackReview) {
       await postCommentToPR(pull_request.comments_url, fallbackReview, token);
       lineCommentCount = 1;
+    } else {
+      // No issues found - post positive feedback
+      const allGoodMessage = `### 🎉 AI Code Review Complete\n\n✅ **All Good!** No issues found. Your code looks great!`;
+      await postCommentToPR(pull_request.comments_url, allGoodMessage, token);
     }
 
     githubApiDurationMs = Date.now() - githubStartTime;

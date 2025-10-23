@@ -1,0 +1,24 @@
+name: Process Review Queue
+
+on:
+  schedule:
+    # Run every minute (reliable cron)
+    - cron: '*/1 * * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  process-queue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process PR review queue
+        run: |
+          curl -X POST https://ai-pr-reviewer-ashen.vercel.app/api/worker/process-queue \
+            -H "Content-Type: application/json" \
+            -d '{}' \
+            --max-time 30 \
+            --retry 2 \
+            --retry-delay 5
+        continue-on-error: true
+
+      - name: Log completion
+        run: echo "Queue processing completed"

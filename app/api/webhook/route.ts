@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
+import axios from 'axios';
 import { PrismaClient } from '@prisma/client';
 import { getReviewQueue, isRedisConfigured, closeQueue } from '@/lib/queue';
 
@@ -178,6 +179,34 @@ export async function POST(request: NextRequest) {
       // Verify job was stored in Redis
       const jobCheck = await queue.getJob(jobId);
       console.log(`[WEBHOOK] Job verification: ${jobCheck ? 'FOUND' : 'NOT FOUND'} in queue`);
+
+      // Trigger GitHub Actions workflow to process queue immediately (non-blocking)
+      // This happens in background without blocking the webhook response
+      (async () => {
+        try {
+          const token = process.env.GITHUB_TOKEN;
+          if (!token) {
+            console.warn('[WEBHOOK] GITHUB_TOKEN not set, skipping workflow dispatch');
+            return;
+          }
+
+          await axios.post(
+            'https://api.github.com/repos/t-tasin/AiPrReviewer/dispatches',
+            { event_type: 'process-review-queue' },
+            {
+              headers: {
+                Authorization: `token ${token}`,
+                Accept: 'application/vnd.github.v3+json',
+              },
+            }
+          );
+
+          console.log('[WEBHOOK] GitHub Actions workflow dispatched');
+        } catch (error) {
+          console.error('[WEBHOOK] Failed to dispatch workflow:', error instanceof Error ? error.message : String(error));
+        }
+      })();
+
       console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
 
       return NextResponse.json(

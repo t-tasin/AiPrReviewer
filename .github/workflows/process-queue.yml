@@ -2,9 +2,11 @@ name: Process Review Queue
 
 on:
   schedule:
-    # Run every minute (reliable cron)
+    # Fallback: Run every minute if webhook dispatch fails
     - cron: '*/1 * * * *'
   workflow_dispatch: # Allow manual trigger
+  repository_dispatch: # Triggered by webhook
+    types: [process-review-queue]
 
 jobs:
   process-queue:
@@ -12,6 +14,7 @@ jobs:
     steps:
       - name: Process PR review queue
         run: |
+          echo "Processing queue..."
           curl -X POST https://ai-pr-reviewer-ashen.vercel.app/api/worker/process-queue \
             -H "Content-Type: application/json" \
             -d '{}' \

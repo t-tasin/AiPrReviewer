@@ -432,17 +432,15 @@ export async function reviewPullRequest(payload: any): Promise<ReviewMetrics> {
         );
         geminiCallDurationMs = Date.now() - geminiStartTime;
 
-        // Cache the new reviews
-        for (const comment of newComments) {
-          const file = filesToReview.find((f) => f.path === comment.file);
-          if (file) {
-            await cacheReview(
-              dbRepository.id,
-              file.path,
-              file.contentHash,
-              JSON.stringify(newComments.filter((c) => c.file === comment.file))
-            );
-          }
+        // Cache the reviews for all reviewed files (even if no issues found)
+        for (const file of filesToReview) {
+          const fileComments = newComments.filter((c) => c.file === file.path);
+          await cacheReview(
+            dbRepository.id,
+            file.path,
+            file.contentHash,
+            JSON.stringify(fileComments)  // Empty array if no issues
+          );
         }
 
         lineComments.push(...newComments);

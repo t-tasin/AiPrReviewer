@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import axios from 'axios';
 import { prisma } from '@/lib/prisma';
-import { getReviewQueue, isRedisConfigured, closeQueue } from '@/lib/queue';
+import { reviewPullRequest } from '@/lib/pr-reviewer';
 
 // Verify GitHub webhook signature
 function verifyGitHubSignature(req: NextRequest, body: string): boolean {
@@ -142,99 +141,64 @@ export async function POST(request: NextRequest) {
     }
 
     // ============================================
-    // QUEUE THE REVIEW JOB (Fast, return immediately)
+    // PROCESS PR REVIEW (Synchronous)
     // ============================================
-    if (!isRedisConfigured()) {
-      console.error('[WEBHOOK] Redis not configured - set REDIS_URL environment variable');
-      return NextResponse.json(
-        {
-          error: 'Async processing not configured',
-          message: 'Set REDIS_URL environment variable to enable PR review queuing',
-          status: 'redis_not_configured',
-        },
-        { status: 503 }
-      );
-    }
-
-    let queue = null;
     try {
-      queue = getReviewQueue();
+      console.log('[WEBHOOK] Starting PR review...');
 
-      const jobData = {
-        body: body,
-        signature: request.headers.get('x-hub-signature-256') || '',
-        timestamp: startTime,
-      };
+      // Process the review
+      const metrics = await reviewPullRequest(payload);
 
-      const jobId = `pr-${repository.id}-${pull_request.number}-${startTime}`;
-      const job = await queue.add('review-pr', jobData, {
-        jobId,
-        priority: 10,
+      // Log metrics to database
+      await prisma.reviewMetric.create({
+        data: {
+          repositoryId: dbRepository.id,
+          prNumber: pull_request.number,
+          startTime: new Date(startTime),
+          endTime: new Date(),
+          latencyMs: metrics.latencyMs,
+          success: metrics.success,
+          errorMessage: metrics.errorMessage,
+          lineCommentCount: metrics.lineCommentCount,
+          geminiCallDurationMs: metrics.geminiCallDurationMs,
+          githubApiDurationMs: metrics.githubApiDurationMs,
+          filesTotalCount: metrics.filesTotalCount || 0,
+          fileCachedCount: metrics.fileCachedCount || 0,
+          cacheHit: (metrics.fileCachedCount || 0) > 0,
+        },
       });
 
-      console.log(`[WEBHOOK] Job queued:`, job.id);
+      console.log('[WEBHOOK] Metrics logged:', {
+        prNumber: pull_request.number,
+        latencyMs: metrics.latencyMs,
+        success: metrics.success,
+        cacheHit: (metrics.fileCachedCount || 0) > 0,
+        fileCachedCount: metrics.fileCachedCount,
+      });
 
-      // Verify job was stored in Redis
-      const jobCheck = await queue.getJob(jobId);
-      console.log(`[WEBHOOK] Job verification: ${jobCheck ? 'FOUND' : 'NOT FOUND'} in queue`);
+      const totalTime = Date.now() - startTime;
+      console.log(`[WEBHOOK] Webhook completed in ${totalTime}ms`);
 
-      // Trigger GitHub Actions workflow to process queue immediately (fire and forget, but logged)
-      const dispatchWorkflow = async () => {
-        try {
-          const token = process.env.GITHUB_TOKEN;
-          if (!token) {
-            console.error('[WEBHOOK] GITHUB_TOKEN not set, cannot dispatch workflow');
-            return;
-          }
-
-          console.log('[WEBHOOK] Attempting to dispatch workflow...');
-
-          const response = await axios.post(
-            'https://api.github.com/repos/t-tasin/AiPrReviewer/dispatches',
-            { event_type: 'process-review-queue' },
-            {
-              headers: {
-                Authorization: `token ${token}`,
-                Accept: 'application/vnd.github.v3+json',
-              },
-              timeout: 5000,
-            }
-          );
-
-          console.log('[WEBHOOK] GitHub Actions workflow dispatched successfully (status: ' + response.status + ')');
-        } catch (error) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-          console.error('[WEBHOOK] Failed to dispatch workflow:', errorMsg);
-          if (axios.isAxiosError(error)) {
-            console.error('[WEBHOOK] Response status:', error.response?.status);
-            console.error('[WEBHOOK] Response data:', error.response?.data);
-          }
-        }
-      };
-
-      // Fire workflow dispatch without blocking webhook response
-      dispatchWorkflow().catch((err) => console.error('[WEBHOOK] Workflow dispatch error:', err));
-
-      console.log(`[WEBHOOK] Webhook response time: ${Date.now() - startTime}ms`);
-
-      return NextResponse.json(
-        { status: 'queued', jobId: job.id },
-        { status: 202 }
-      );
-    } catch (queueError) {
-      const errorMsg = queueError instanceof Error ? queueError.message : String(queueError);
-      console.error('[WEBHOOK] Failed to queue job:', errorMsg);
       return NextResponse.json(
         {
-          error: 'Failed to queue review job',
+          status: 'completed',
+          success: metrics.success,
+          latencyMs: metrics.latencyMs,
+          cacheHit: (metrics.fileCachedCount || 0) > 0,
+        },
+        { status: 200 }
+      );
+    } catch (reviewError) {
+      const errorMsg = reviewError instanceof Error ? reviewError.message : String(reviewError);
+      console.error('[WEBHOOK] PR review failed:', errorMsg);
+
+      return NextResponse.json(
+        {
+          error: 'PR review failed',
           message: errorMsg,
         },
         { status: 500 }
       );
-    } finally {
-      if (queue) {
-        await closeQueue(queue);
-      }
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
